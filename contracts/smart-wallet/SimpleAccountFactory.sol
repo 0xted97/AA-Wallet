@@ -11,7 +11,7 @@ import "./interfaces/IEntryPoint.sol";
 import "./SimpleAccount.sol";
 
 contract SimpleAccountFactory {
-    event EmitT(address add);
+    event AccountCreated(address addr);
 
     SimpleAccount public immutable accountImplementation;
 
@@ -33,7 +33,7 @@ contract SimpleAccountFactory {
         address owner,
         uint256 salt
     ) public returns (SimpleAccount ret) {
-        address addr = getAddress(owner, salt);
+        address addr = computeAddress(owner, salt);
         uint codeSize = addr.code.length;
         if (codeSize > 0) {
             return SimpleAccount(payable(addr));
@@ -65,13 +65,13 @@ contract SimpleAccountFactory {
         if(addr != address(ret)) {
             revert();
         }
-        emit EmitT(address(ret));
+        emit AccountCreated(address(ret));
     }
 
     /**
      * calculate the counterfactual address of this account as it would be returned by createAccount()
      */
-    function getAddress(
+    function computeAddress(
         address owner,
         uint256 salt
     ) public view returns (address) {

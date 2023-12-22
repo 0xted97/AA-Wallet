@@ -20,16 +20,16 @@ describe("SmartAccountFactory", function () {
   }
 
   describe("Deploy smart account", function () {
-    const salt = 456;
+    const salt = 123;
     it("Should get address", async function () {
       const { factory, entryPoint } = await loadFixture(deployFactory);
-      console.log("🚀 ~ file: SmartAccountFactory.ts:26 ~ entryPoint:", entryPoint)
+      console.log("🚀 ~ file: SmartAccountFactory.ts:26 ~ factory:", factory.target)
       const [_, otherAccount] = await ethers.getSigners();
-      const address = await factory.getAddress(otherAccount.address, salt);
+      const address = await factory.computeAddress(otherAccount.address, salt);
       const create = await factory.createAccount(otherAccount.address, salt);
       await create.wait();
       const account = await ethers.getContractAt("SimpleAccount", address);
-      console.log("🚀 ~ file: SmartAccountFactory.ts:31 ~ account:", await account.entryPoint())
+      console.log("🚀 ~ file: SmartAccountFactory.ts:31 ~ account:", await account.owner())
     });
 
   });
