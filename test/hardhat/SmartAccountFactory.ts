@@ -27,6 +27,8 @@ describe("SmartAccountFactory", function () {
     return { factory, tokenErc20, tokenErc20Other, lockErc20, mockOracle, entryPoint, depositPaymaster };
   }
 
+
+
   async function getEOAAccounts() {
     const [deployer, eoa1, eoa2, beneficiary, approve, bundler,] = await ethers.getSigners();
     return { deployer, eoa1, eoa2, beneficiary, approve, bundler };
@@ -37,14 +39,16 @@ describe("SmartAccountFactory", function () {
    * Paymaster deposit ETH to pay gas fees
    */
   beforeEach(async () => {
-    const { tokenErc20, mockOracle, depositPaymaster } = await loadFixture(deployContracts);
+    const { tokenErc20, mockOracle, depositPaymaster, entryPoint } = await loadFixture(deployContracts);
     const addTokenTx = await depositPaymaster.addToken(tokenErc20.target, mockOracle.target);
     await addTokenTx.wait();
 
     const depositETHTx = await depositPaymaster.deposit({
       value: ethers.parseEther("100"),
     });
-    depositETHTx.wait();
+    await depositETHTx.wait();
+
+    const balanceOfPaymaster = await entryPoint.balanceOf(depositPaymaster.target);
   });
 
   describe("Deploy smart account", function () {
@@ -64,9 +68,9 @@ describe("SmartAccountFactory", function () {
     });
   });
 
-  describe("Should create UserOperation approve and transfer token (Without paymaster)", function () {
+  describe("Should execute UserOperation (Without paymaster)", function () {
     const salt = 123123;
-    it("Should get address", async function () {
+    it("Should pay be ETH", async function () {
       const { factory, entryPoint, tokenErc20, lockErc20 } = await loadFixture(deployContracts);
       const { eoa1, approve, beneficiary, bundler } = await getEOAAccounts();
 
@@ -126,8 +130,6 @@ describe("SmartAccountFactory", function () {
         callData: lockTokenCallData,
       }, eoa1, entryPoint);
 
-
-
       // Send by "bundler"
       const handleOpsTx = await entryPoint.connect(bundler).handleOps([
         approveOp, transferOp, lockTokenOp
@@ -138,13 +140,86 @@ describe("SmartAccountFactory", function () {
       const allowance = await tokenErc20.allowance(smartAccount.target, lockErc20.target);
       const balanceOfBeneficiary = await tokenErc20.balanceOf(beneficiary.address);
       const balanceOfLockToken = await tokenErc20.balanceOf(lockErc20.target);
-      console.log("🚀 ~ file: SmartAccountFactory.ts:141 ~ balanceOfLockToken:", balanceOfLockToken)
 
-
+      // Using test by event
       expect(allowance).to.equal(ethers.MaxUint256);
       expect(balanceOfBeneficiary).to.equal(amountToTransfer);
       expect(balanceOfLockToken).to.equal(amountToLock);
+
+
     });
   });
 
+
+  describe("Should execute UserOperation (Using paymaster)", function () {
+    const salt = 123123123;
+    it("Should pay be ETH", async function () {
+      const { factory, entryPoint, depositPaymaster, tokenErc20, lockErc20, mockOracle } = await loadFixture(deployContracts);
+      const { deployer, eoa1, beneficiary, bundler } = await getEOAAccounts();
+
+      const smartAccountAddress = await factory.computeAddress(eoa1.address, salt);
+      const smartAccount = await ethers.getContractAt("SimpleAccount", smartAccountAddress);
+
+
+      // should in Before each
+      await depositPaymaster.addToken(tokenErc20.target, mockOracle.target);
+      await depositPaymaster.deposit({
+        value: ethers.parseEther("100"),
+      });
+      await tokenErc20.transfer(smartAccountAddress, ethers.parseEther("100000"));
+
+      // Get init code
+      const initCode = getAccountInitCode(eoa1.address, factory, salt);
+
+      const paymasterAndData = (await depositPaymaster.getAddress()) + tokenErc20.target.toString().slice(2);
+      // Encode approve
+      const approveData = tokenErc20.interface.encodeFunctionData("approve", [depositPaymaster.target, ethers.MaxUint256]);
+
+      const approveCallData = smartAccount.interface.encodeFunctionData('execute', [tokenErc20.target, ethers.ZeroAddress, approveData]);
+      const approveOp = await fillAndSign({
+        sender: smartAccountAddress,
+        nonce: await entryPoint.getNonce(smartAccountAddress, 0),
+        initCode,
+        callData: approveCallData,
+        paymasterAndData
+      }, eoa1, entryPoint);
+
+
+      // Approve Lock contract and lock token
+      const approveLockContractData = tokenErc20.interface.encodeFunctionData("approve", [lockErc20.target, ethers.MaxUint256]);
+
+      const approveLockContractCallData = smartAccount.interface.encodeFunctionData('execute', [tokenErc20.target, 0, approveLockContractData]);
+      const approveLockContractOp = await fillAndSign({
+        sender: smartAccountAddress,
+        nonce: await entryPoint.getNonce(smartAccountAddress, 1),
+        initCode: '0x',
+        callData: approveLockContractCallData,
+        paymasterAndData,
+      }, eoa1, entryPoint);
+
+      const amountToLock = ethers.parseEther("1.3");
+      const lockTokenData = lockErc20.interface.encodeFunctionData("lockTokens", [amountToLock]);
+      const lockTokenCallData = smartAccount.interface.encodeFunctionData('execute', [lockErc20.target, 0, lockTokenData]);
+
+      const lockTokenOp = await fillAndSign({
+        sender: smartAccountAddress,
+        nonce: await entryPoint.getNonce(smartAccountAddress, 3),
+        initCode: "0x",
+        callData: lockTokenCallData,
+        paymasterAndData,
+      }, eoa1, entryPoint);
+
+      // Send by "bundler"
+      const handleOpsTx = await entryPoint.connect(bundler).handleOps([
+        approveOp, approveLockContractOp, lockTokenOp
+      ], beneficiary.address);
+
+      await handleOpsTx.wait();
+
+
+      const balanceOfLockToken = await tokenErc20.balanceOf(lockErc20.target);
+
+      expect(balanceOfLockToken).to.equal(amountToLock);
+    });
+  });
 });

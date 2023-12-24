@@ -141,7 +141,7 @@ contract DepositPaymaster is BasePaymaster {
         require(unlockBlock[account] == 0, "DepositPaymaster: deposit not locked");
 //        console.log("balances[token][account]", balances[token][account]);
 //        console.log("maxTokenCost", maxTokenCost);
-//        require(balances[token][account] >= maxTokenCost, "DepositPaymaster: deposit too low");
+        // require(balances[token][account] >= maxTokenCost, "DepositPaymaster: deposit too low");
         return (abi.encode(account, token, gasPriceUserOp, maxTokenCost, maxCost),0);
     }
 
