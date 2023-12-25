@@ -5,18 +5,23 @@ import "@nomicfoundation/hardhat-ethers";
 
 const config: HardhatUserConfig = {
   solidity: {
-    compilers: [{
-      version: '0.8.20',
-      settings: {
-        optimizer: { enabled: true, runs: 1000000 }
+    compilers: [
+      {
+        version: '0.8.20',
+        settings: {
+          optimizer: { enabled: true, runs: 1000000 }
+        }
+      },
+      {
+        version: '0.4.22',
       }
-    }],
+    ],
   },
   defaultNetwork: "hardhat",
   networks: {
     hardhat: {
       chainId: 31337,
-  },
+    },
   }
 
 };

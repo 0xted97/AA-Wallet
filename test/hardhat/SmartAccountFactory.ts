@@ -5,37 +5,77 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { fillAndSign, getAccountInitCode } from "../utils/user-op";
 import { getPaymasterAndData, concatHash } from "../utils/verify-pasmaster";
-import { toBeArray } from "ethers";
+import { TokenPaymaster } from "../../typechain-types";
 
 describe("SmartAccountFactory", function () {
-  const MOCK_VALID_UNTIL = '0x00000000deadbeef';
-  const MOCK_VALID_AFTER = '0x0000000000001234';
-  const MOCK_SIG = '0x1234';
 
   async function deployContracts() {
-    const { verifier } = await getEOAAccounts();
+    const initialPriceToken = 100000000 // USD per TOK
+    const initialPriceEther = 500000000 // USD per ETH
 
+    const {deployer, verifier } = await getEOAAccounts();
+
+    const WETH9 = await ethers.getContractFactory("WETH9");
     const TokenERC20 = await ethers.getContractFactory("TokenERC20");
     const TokenNFT = await ethers.getContractFactory("TokenNFT");
     const MockOracle = await ethers.getContractFactory("MockOracle");
+    const MockUniSwap = await ethers.getContractFactory("MockUniSwap");
     const DepositPaymaster = await ethers.getContractFactory("DepositPaymaster");
     const VerifyingPaymaster = await ethers.getContractFactory("VerifyingPaymaster");
+    const TokenPaymaster = await ethers.getContractFactory("TokenPaymaster");
     const EntryPoint = await ethers.getContractFactory("EntryPoint");
     const SimpleAccountFactory = await ethers.getContractFactory("SimpleAccountFactory");
     const LockERC20 = await ethers.getContractFactory("LockERC20");
 
 
     const entryPoint = await EntryPoint.deploy();
+    const weth9 = await WETH9.deploy();
     const tokenErc20 = await TokenERC20.deploy();
     const tokenNft = await TokenNFT.deploy();
     const tokenErc20Other = await TokenERC20.deploy();
-    const mockOracle = await MockOracle.deploy();
-    const depositPaymaster = await DepositPaymaster.deploy(entryPoint.target);
+    const mockTokenOracle = await MockOracle.deploy(initialPriceToken);
+    const mockETHOracle = await MockOracle.deploy(initialPriceEther);
+    const mockUniswap = await MockUniSwap.deploy(weth9.target.toString());
     const verifyingPaymaster = await VerifyingPaymaster.deploy(entryPoint.target, verifier.address);
+    const depositPaymaster = await DepositPaymaster.deploy(entryPoint.target);
+
+
+    const tokenPaymasterConfig: TokenPaymaster.TokenPaymasterConfigStruct = {
+      priceMaxAge: 86400,
+      refundPostopCost: 40000,
+      minEntryPointBalance: 1e17.toString(),
+      priceMarkup: 0 // +50%
+    }
+    const oracleHelperConfig = {
+      cacheTimeToLive: 0,
+      nativeOracle: mockETHOracle.target,
+      nativeOracleReverse: false,
+      priceUpdateThreshold: 200_000, // +20%
+      tokenOracle: mockTokenOracle.target,
+      tokenOracleReverse: false,
+      tokenToNativeOracle: false
+    }
+
+    const uniswapHelperConfig = {
+      minSwapAmount: 1,
+      slippage: 5,
+      uniswapPoolFee: 3
+    }
+
+    const tokenPaymaster = await TokenPaymaster.deploy(
+      tokenErc20.target.toString(),
+      entryPoint.target.toString(),
+      weth9.target.toString(), // WETH9
+      mockUniswap.target.toString(), // Uniswap example
+      tokenPaymasterConfig,
+      oracleHelperConfig,
+      uniswapHelperConfig,
+      deployer.address,
+    );
     const factory = await SimpleAccountFactory.deploy(entryPoint.target);
     const lockErc20 = await LockERC20.deploy(tokenErc20.target);
 
-    return { factory, tokenErc20, tokenNft, tokenErc20Other, lockErc20, mockOracle, entryPoint, depositPaymaster, verifyingPaymaster };
+    return { factory, tokenErc20, tokenNft, tokenErc20Other, lockErc20, mockTokenOracle, mockETHOracle, entryPoint, depositPaymaster, verifyingPaymaster, tokenPaymaster };
   }
 
 
@@ -175,7 +215,7 @@ describe("SmartAccountFactory", function () {
       const allowance = await tokenErc20.allowance(smartAccount.target, lockErc20.target);
       const balanceOfBeneficiary = await tokenErc20.balanceOf(beneficiary.address);
       const balanceOfLockToken = await tokenErc20.balanceOf(lockErc20.target);
-      const balanceNFTOfBeneficiary  = await tokenNft.balanceOf(beneficiary.address);
+      const balanceNFTOfBeneficiary = await tokenNft.balanceOf(beneficiary.address);
 
       // Using test by event
       expect(allowance).to.equal(ethers.MaxUint256);
@@ -191,7 +231,7 @@ describe("SmartAccountFactory", function () {
   describe("Should execute UserOperation (Using paymaster)", function () {
     const salt = 123123123;
     it("Should user pay as ERC20", async function () {
-      const { factory, entryPoint, depositPaymaster, tokenErc20, lockErc20, mockOracle } = await loadFixture(deployContracts);
+      const { factory, entryPoint, depositPaymaster, tokenErc20, lockErc20, mockETHOracle } = await loadFixture(deployContracts);
       const { eoa1, beneficiary, bundler } = await getEOAAccounts();
 
       const smartAccountAddress = await factory.computeAddress(eoa1.address, salt);
@@ -199,7 +239,7 @@ describe("SmartAccountFactory", function () {
 
 
       // should in Before each
-      await depositPaymaster.addToken(tokenErc20.target, mockOracle.target);
+      await depositPaymaster.addToken(tokenErc20.target, mockETHOracle.target);
       await depositPaymaster.deposit({
         value: ethers.parseEther("100"),
       });
@@ -263,7 +303,7 @@ describe("SmartAccountFactory", function () {
       expect(balanceOfLockToken).to.equal(amountToLock);
     });
 
-    it("Should paymaster pay fee for user as ETH, must verify by verifier", async function () {
+    it("Should use VerifyingPaymaster pay fee for user, must verify by verifier", async function () {
       const { factory, entryPoint, verifyingPaymaster, tokenErc20, lockErc20 } = await loadFixture(deployContracts);
       const { eoa1, beneficiary, bundler, verifier } = await getEOAAccounts();
 
@@ -328,6 +368,15 @@ describe("SmartAccountFactory", function () {
       const balanceOfLockToken = await tokenErc20.balanceOf(lockErc20.target);
 
       expect(balanceOfLockToken).to.equal(amountToLock);
+    });
+
+    it("Should use TokenPaymaster, swap token <-> ETH to pay fee", async function () {
+      const { factory, entryPoint, depositPaymaster, tokenErc20, lockErc20, mockOracle } = await loadFixture(deployContracts);
+      const { eoa1, beneficiary, bundler } = await getEOAAccounts();
+
+      const smartAccountAddress = await factory.computeAddress(eoa1.address, salt);
+      const smartAccount = await ethers.getContractAt("SimpleAccount", smartAccountAddress);
+
     });
   });
 });
