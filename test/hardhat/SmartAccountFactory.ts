@@ -153,9 +153,9 @@ describe("SmartAccountFactory", function () {
 
   describe("Should execute UserOperation (Using paymaster)", function () {
     const salt = 123123123;
-    it("Should pay be ETH", async function () {
+    it("Should user pay as ERC20", async function () {
       const { factory, entryPoint, depositPaymaster, tokenErc20, lockErc20, mockOracle } = await loadFixture(deployContracts);
-      const { deployer, eoa1, beneficiary, bundler } = await getEOAAccounts();
+      const { eoa1, beneficiary, bundler } = await getEOAAccounts();
 
       const smartAccountAddress = await factory.computeAddress(eoa1.address, salt);
       const smartAccount = await ethers.getContractAt("SimpleAccount", smartAccountAddress);
@@ -166,24 +166,23 @@ describe("SmartAccountFactory", function () {
       await depositPaymaster.deposit({
         value: ethers.parseEther("100"),
       });
-      await tokenErc20.transfer(smartAccountAddress, ethers.parseEther("100000"));
+      await tokenErc20.transfer(smartAccountAddress, ethers.parseEther("1000"));
 
       // Get init code
       const initCode = getAccountInitCode(eoa1.address, factory, salt);
 
       const paymasterAndData = (await depositPaymaster.getAddress()) + tokenErc20.target.toString().slice(2);
       // Encode approve
-      const approveData = tokenErc20.interface.encodeFunctionData("approve", [depositPaymaster.target, ethers.MaxUint256]);
+      const approvePaymasterData = tokenErc20.interface.encodeFunctionData("approve", [depositPaymaster.target, ethers.MaxUint256]);
 
-      const approveCallData = smartAccount.interface.encodeFunctionData('execute', [tokenErc20.target, ethers.ZeroAddress, approveData]);
-      const approveOp = await fillAndSign({
+      const approvePaymasterCallData = smartAccount.interface.encodeFunctionData('execute', [tokenErc20.target, ethers.ZeroAddress, approvePaymasterData]);
+      const approvePaymasterOp = await fillAndSign({
         sender: smartAccountAddress,
         nonce: await entryPoint.getNonce(smartAccountAddress, 0),
         initCode,
-        callData: approveCallData,
-        paymasterAndData
+        callData: approvePaymasterCallData,
+        paymasterAndData,
       }, eoa1, entryPoint);
-
 
       // Approve Lock contract and lock token
       const approveLockContractData = tokenErc20.interface.encodeFunctionData("approve", [lockErc20.target, ethers.MaxUint256]);
@@ -211,13 +210,20 @@ describe("SmartAccountFactory", function () {
 
       // Send by "bundler"
       const handleOpsTx = await entryPoint.connect(bundler).handleOps([
-        approveOp, approveLockContractOp, lockTokenOp
+        approvePaymasterOp, approveLockContractOp, lockTokenOp
       ], beneficiary.address);
 
       await handleOpsTx.wait();
 
 
+      const allowance = await tokenErc20.allowance(smartAccountAddress, depositPaymaster.target);
+      console.log("🚀 ~ file: SmartAccountFactory.ts:220 ~ allowance:", allowance)
+      const balanceOfPaymaster = await tokenErc20.balanceOf(depositPaymaster.target);
+      console.log("🚀 ~ file: SmartAccountFactory.ts:220 ~ balanceOfPaymaster:", balanceOfPaymaster)
+      const balanceOfSmartAccount = await tokenErc20.balanceOf(smartAccountAddress);
+      console.log("🚀 ~ file: SmartAccountFactory.ts:222 ~ balanceOfSmartAccount:", balanceOfSmartAccount)
       const balanceOfLockToken = await tokenErc20.balanceOf(lockErc20.target);
+      console.log("🚀 ~ file: SmartAccountFactory.ts:226 ~ balanceOfLockToken:", balanceOfLockToken)
 
       expect(balanceOfLockToken).to.equal(amountToLock);
     });
