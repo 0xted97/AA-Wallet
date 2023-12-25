@@ -19,7 +19,7 @@ export function concatHash(verifyingPaymaster: VerifyingPaymaster, signature: st
   return concat([verifyingPaymaster.target.toString(), defaultAbiCoder.encode(['uint48', 'uint48'], [MOCK_VALID_UNTIL, MOCK_VALID_AFTER]), signature])
 }
 
-export async function getPaymasterAndData(op: UserOperation, verifyingPaymaster: VerifyingPaymaster, verifier: Wallet | Signer): Promise<string> {
+export async function generatePaymasterAndDataOfVerifyingPM(op: UserOperation, verifyingPaymaster: VerifyingPaymaster, verifier: Wallet | Signer): Promise<string> {
   const opHash = await verifyingPaymaster.getHash(op, MOCK_VALID_UNTIL, MOCK_VALID_AFTER);
   const sig = await verifier.signMessage(toBeArray(opHash));
   const data = concat([
