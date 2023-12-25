@@ -16,6 +16,7 @@ describe("SmartAccountFactory", function () {
     const { verifier } = await getEOAAccounts();
 
     const TokenERC20 = await ethers.getContractFactory("TokenERC20");
+    const TokenNFT = await ethers.getContractFactory("TokenNFT");
     const MockOracle = await ethers.getContractFactory("MockOracle");
     const DepositPaymaster = await ethers.getContractFactory("DepositPaymaster");
     const VerifyingPaymaster = await ethers.getContractFactory("VerifyingPaymaster");
@@ -26,6 +27,7 @@ describe("SmartAccountFactory", function () {
 
     const entryPoint = await EntryPoint.deploy();
     const tokenErc20 = await TokenERC20.deploy();
+    const tokenNft = await TokenNFT.deploy();
     const tokenErc20Other = await TokenERC20.deploy();
     const mockOracle = await MockOracle.deploy();
     const depositPaymaster = await DepositPaymaster.deploy(entryPoint.target);
@@ -33,7 +35,7 @@ describe("SmartAccountFactory", function () {
     const factory = await SimpleAccountFactory.deploy(entryPoint.target);
     const lockErc20 = await LockERC20.deploy(tokenErc20.target);
 
-    return { factory, tokenErc20, tokenErc20Other, lockErc20, mockOracle, entryPoint, depositPaymaster, verifyingPaymaster };
+    return { factory, tokenErc20, tokenNft, tokenErc20Other, lockErc20, mockOracle, entryPoint, depositPaymaster, verifyingPaymaster };
   }
 
 
@@ -73,12 +75,26 @@ describe("SmartAccountFactory", function () {
       expect(owner).to.equal(eoa1.address);
       expect(actualEntryPoint).to.equal(entryPoint.target);
     });
+
+    it("Should smart account can receive NFT", async function () {
+      const { factory, tokenNft } = await loadFixture(deployContracts);
+      const { eoa1 } = await getEOAAccounts();
+      const address = await factory.computeAddress(eoa1.address, salt);
+      const create = await factory.createAccount(eoa1.address, salt);
+      await create.wait();
+
+      // Mint NFT
+      const mintTx = await tokenNft.mint(address, "uri");
+      await mintTx.wait();
+
+      expect(await tokenNft.balanceOf(address)).to.equal(1);
+    });
   });
 
   describe("Should execute UserOperation (Without paymaster)", function () {
     const salt = 123123;
     it("Should pay be ETH", async function () {
-      const { factory, entryPoint, tokenErc20, lockErc20 } = await loadFixture(deployContracts);
+      const { factory, entryPoint, tokenErc20, tokenNft, lockErc20 } = await loadFixture(deployContracts);
       const { eoa1, beneficiary, bundler } = await getEOAAccounts();
 
       const smartAccountAddress = await factory.computeAddress(eoa1.address, salt);
@@ -95,10 +111,6 @@ describe("SmartAccountFactory", function () {
         to: smartAccountAddress,
         value: ethers.parseEther("10"),
       });
-
-      // await entryPoint.depositTo(await smartAccount.getAddress(), {
-      //   value: ethers.parseEther("10"),
-      // });
 
       // Encode approve
       const approveData = tokenErc20.interface.encodeFunctionData("approve", [lockErc20.target, ethers.MaxUint256]);
@@ -137,9 +149,25 @@ describe("SmartAccountFactory", function () {
         callData: lockTokenCallData,
       }, eoa1, entryPoint);
 
+      // Mint to transfer
+      const currentTokenId = await tokenNft.currentTokenId();
+      const mintTx = await tokenNft.mint(smartAccountAddress, "uri");
+      await mintTx.wait();
+
+      // Transfer NFT to other
+      const transferNftData = tokenNft.interface.encodeFunctionData("transferFrom", [smartAccountAddress, beneficiary.address, currentTokenId]);
+      const transferNftCallData = smartAccount.interface.encodeFunctionData('execute', [tokenNft.target, 0, transferNftData]);
+
+      const transferNftOp = await fillAndSign({
+        sender: smartAccountAddress,
+        nonce: await entryPoint.getNonce(smartAccountAddress, 4),
+        initCode: "0x",
+        callData: transferNftCallData,
+      }, eoa1, entryPoint);
+
       // Send by "bundler"
       const handleOpsTx = await entryPoint.connect(bundler).handleOps([
-        approveOp, transferOp, lockTokenOp
+        approveOp, transferOp, lockTokenOp, transferNftOp
       ], beneficiary.address);
 
       await handleOpsTx.wait();
@@ -147,11 +175,13 @@ describe("SmartAccountFactory", function () {
       const allowance = await tokenErc20.allowance(smartAccount.target, lockErc20.target);
       const balanceOfBeneficiary = await tokenErc20.balanceOf(beneficiary.address);
       const balanceOfLockToken = await tokenErc20.balanceOf(lockErc20.target);
+      const balanceNFTOfBeneficiary  = await tokenNft.balanceOf(beneficiary.address);
 
       // Using test by event
       expect(allowance).to.equal(ethers.MaxUint256);
       expect(balanceOfBeneficiary).to.equal(amountToTransfer);
       expect(balanceOfLockToken).to.equal(amountToLock);
+      expect(balanceNFTOfBeneficiary).to.equal(1);
 
 
     });
