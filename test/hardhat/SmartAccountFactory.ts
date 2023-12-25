@@ -38,18 +38,16 @@ describe("SmartAccountFactory", function () {
    * Setup price feed and allow pay by token
    * Paymaster deposit ETH to pay gas fees
    */
-  beforeEach(async () => {
-    const { tokenErc20, mockOracle, depositPaymaster, entryPoint } = await loadFixture(deployContracts);
-    const addTokenTx = await depositPaymaster.addToken(tokenErc20.target, mockOracle.target);
-    await addTokenTx.wait();
+  // beforeEach(async () => {
+  //   const { tokenErc20, mockOracle, depositPaymaster } = await loadFixture(deployContracts);
+  //   const addTokenTx = await depositPaymaster.addToken(tokenErc20.target, mockOracle.target);
+  //   await addTokenTx.wait();
 
-    const depositETHTx = await depositPaymaster.deposit({
-      value: ethers.parseEther("100"),
-    });
-    await depositETHTx.wait();
-
-    const balanceOfPaymaster = await entryPoint.balanceOf(depositPaymaster.target);
-  });
+  //   const depositETHTx = await depositPaymaster.deposit({
+  //     value: ethers.parseEther("100"),
+  //   });
+  //   await depositETHTx.wait();
+  // });
 
   describe("Deploy smart account", function () {
     const salt = 112024;
@@ -72,7 +70,7 @@ describe("SmartAccountFactory", function () {
     const salt = 123123;
     it("Should pay be ETH", async function () {
       const { factory, entryPoint, tokenErc20, lockErc20 } = await loadFixture(deployContracts);
-      const { eoa1, approve, beneficiary, bundler } = await getEOAAccounts();
+      const { eoa1, beneficiary, bundler } = await getEOAAccounts();
 
       const smartAccountAddress = await factory.computeAddress(eoa1.address, salt);
       const smartAccount = await ethers.getContractAt("SimpleAccount", smartAccountAddress);
@@ -167,6 +165,7 @@ describe("SmartAccountFactory", function () {
         value: ethers.parseEther("100"),
       });
       await tokenErc20.transfer(smartAccountAddress, ethers.parseEther("1000"));
+      
 
       // Get init code
       const initCode = getAccountInitCode(eoa1.address, factory, salt);
@@ -217,13 +216,9 @@ describe("SmartAccountFactory", function () {
 
 
       const allowance = await tokenErc20.allowance(smartAccountAddress, depositPaymaster.target);
-      console.log("🚀 ~ file: SmartAccountFactory.ts:220 ~ allowance:", allowance)
       const balanceOfPaymaster = await tokenErc20.balanceOf(depositPaymaster.target);
-      console.log("🚀 ~ file: SmartAccountFactory.ts:220 ~ balanceOfPaymaster:", balanceOfPaymaster)
       const balanceOfSmartAccount = await tokenErc20.balanceOf(smartAccountAddress);
-      console.log("🚀 ~ file: SmartAccountFactory.ts:222 ~ balanceOfSmartAccount:", balanceOfSmartAccount)
       const balanceOfLockToken = await tokenErc20.balanceOf(lockErc20.target);
-      console.log("🚀 ~ file: SmartAccountFactory.ts:226 ~ balanceOfLockToken:", balanceOfLockToken)
 
       expect(balanceOfLockToken).to.equal(amountToLock);
     });
