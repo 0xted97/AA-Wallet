@@ -4,13 +4,21 @@ import {
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { fillAndSign, getAccountInitCode } from "../utils/user-op";
+import { getPaymasterAndData, concatHash } from "../utils/verify-pasmaster";
+import { toBeArray } from "ethers";
 
 describe("SmartAccountFactory", function () {
+  const MOCK_VALID_UNTIL = '0x00000000deadbeef';
+  const MOCK_VALID_AFTER = '0x0000000000001234';
+  const MOCK_SIG = '0x1234';
 
   async function deployContracts() {
+    const { verifier } = await getEOAAccounts();
+
     const TokenERC20 = await ethers.getContractFactory("TokenERC20");
     const MockOracle = await ethers.getContractFactory("MockOracle");
     const DepositPaymaster = await ethers.getContractFactory("DepositPaymaster");
+    const VerifyingPaymaster = await ethers.getContractFactory("VerifyingPaymaster");
     const EntryPoint = await ethers.getContractFactory("EntryPoint");
     const SimpleAccountFactory = await ethers.getContractFactory("SimpleAccountFactory");
     const LockERC20 = await ethers.getContractFactory("LockERC20");
@@ -21,17 +29,18 @@ describe("SmartAccountFactory", function () {
     const tokenErc20Other = await TokenERC20.deploy();
     const mockOracle = await MockOracle.deploy();
     const depositPaymaster = await DepositPaymaster.deploy(entryPoint.target);
+    const verifyingPaymaster = await VerifyingPaymaster.deploy(entryPoint.target, verifier.address);
     const factory = await SimpleAccountFactory.deploy(entryPoint.target);
     const lockErc20 = await LockERC20.deploy(tokenErc20.target);
 
-    return { factory, tokenErc20, tokenErc20Other, lockErc20, mockOracle, entryPoint, depositPaymaster };
+    return { factory, tokenErc20, tokenErc20Other, lockErc20, mockOracle, entryPoint, depositPaymaster, verifyingPaymaster };
   }
 
 
 
   async function getEOAAccounts() {
-    const [deployer, eoa1, eoa2, beneficiary, approve, bundler,] = await ethers.getSigners();
-    return { deployer, eoa1, eoa2, beneficiary, approve, bundler };
+    const [deployer, eoa1, eoa2, beneficiary, approve, bundler, verifier] = await ethers.getSigners();
+    return { deployer, eoa1, eoa2, beneficiary, approve, bundler, verifier };
   }
 
   /**
@@ -165,11 +174,12 @@ describe("SmartAccountFactory", function () {
         value: ethers.parseEther("100"),
       });
       await tokenErc20.transfer(smartAccountAddress, ethers.parseEther("1000"));
-      
+
 
       // Get init code
       const initCode = getAccountInitCode(eoa1.address, factory, salt);
 
+      // TODO: Upgrade Paymaster, it should sign message and verify signature in _validatePaymasterUserOp
       const paymasterAndData = (await depositPaymaster.getAddress()) + tokenErc20.target.toString().slice(2);
       // Encode approve
       const approvePaymasterData = tokenErc20.interface.encodeFunctionData("approve", [depositPaymaster.target, ethers.MaxUint256]);
@@ -218,6 +228,73 @@ describe("SmartAccountFactory", function () {
       const allowance = await tokenErc20.allowance(smartAccountAddress, depositPaymaster.target);
       const balanceOfPaymaster = await tokenErc20.balanceOf(depositPaymaster.target);
       const balanceOfSmartAccount = await tokenErc20.balanceOf(smartAccountAddress);
+      const balanceOfLockToken = await tokenErc20.balanceOf(lockErc20.target);
+
+      expect(balanceOfLockToken).to.equal(amountToLock);
+    });
+
+    it("Should paymaster pay fee for user as ETH, must verify by verifier", async function () {
+      const { factory, entryPoint, verifyingPaymaster, tokenErc20, lockErc20 } = await loadFixture(deployContracts);
+      const { eoa1, beneficiary, bundler, verifier } = await getEOAAccounts();
+
+      const smartAccountAddress = await factory.computeAddress(eoa1.address, salt);
+      const smartAccount = await ethers.getContractAt("SimpleAccount", smartAccountAddress);
+
+      // Deposit ETH to pay fee
+      await verifyingPaymaster.deposit({
+        value: ethers.parseEther("100"),
+      });
+      // Transfer to smart account
+      await tokenErc20.transfer(smartAccountAddress, ethers.parseEther("1000"));
+
+
+
+      // Get init code
+      const initCode = getAccountInitCode(eoa1.address, factory, salt);
+
+
+      // Approve Lock contract and lock token
+      const approveLockContractData = tokenErc20.interface.encodeFunctionData("approve", [lockErc20.target, ethers.MaxUint256]);
+
+      const paymasterAndDataEmpty = concatHash(verifyingPaymaster);
+      const approveLockContractCallData = smartAccount.interface.encodeFunctionData('execute', [tokenErc20.target, 0, approveLockContractData]);
+      const approveLockContractOp = await fillAndSign({
+        sender: smartAccountAddress,
+        nonce: await entryPoint.getNonce(smartAccountAddress, 1),
+        initCode,
+        callData: approveLockContractCallData,
+        paymasterAndData: paymasterAndDataEmpty
+      }, eoa1, entryPoint);
+
+      const approveLockContractWithPaymasterOp = await fillAndSign({
+        ...approveLockContractOp,
+        paymasterAndData: await getPaymasterAndData(approveLockContractOp, verifyingPaymaster, verifier),
+      }, eoa1, entryPoint);
+
+      const amountToLock = ethers.parseEther("1.3");
+      const lockTokenData = lockErc20.interface.encodeFunctionData("lockTokens", [amountToLock]);
+      const lockTokenCallData = smartAccount.interface.encodeFunctionData('execute', [lockErc20.target, 0, lockTokenData]);
+
+      const lockTokenOp = await fillAndSign({
+        sender: smartAccountAddress,
+        nonce: await entryPoint.getNonce(smartAccountAddress, 2),
+        initCode: "0x",
+        callData: lockTokenCallData,
+        paymasterAndData: paymasterAndDataEmpty,
+      }, eoa1, entryPoint);
+
+      const lockTokenWithPaymasterOp = await fillAndSign({
+        ...lockTokenOp,
+        paymasterAndData: await getPaymasterAndData(lockTokenOp, verifyingPaymaster, verifier),
+      }, eoa1, entryPoint);
+
+      // Send by "bundler"
+      const handleOpsTx = await entryPoint.connect(bundler).handleOps([
+        approveLockContractWithPaymasterOp, lockTokenWithPaymasterOp
+      ], beneficiary.address);
+
+      await handleOpsTx.wait();
+
       const balanceOfLockToken = await tokenErc20.balanceOf(lockErc20.target);
 
       expect(balanceOfLockToken).to.equal(amountToLock);
