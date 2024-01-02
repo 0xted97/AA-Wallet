@@ -13,7 +13,7 @@ import { UserOperation } from './types';
 const MOCK_VALID_UNTIL = '0x00000000deadbeef';
 const MOCK_VALID_AFTER = '0x0000000000001234';
 
-const defaultAbiCoder = new AbiCoder();
+const defaultAbiCoder =  AbiCoder.defaultAbiCoder();
 
 export function concatHash(verifyingPaymaster: VerifyingPaymaster, signature: string = '0x' + '00'.repeat(65)): string {
   return concat([verifyingPaymaster.target.toString(), defaultAbiCoder.encode(['uint48', 'uint48'], [MOCK_VALID_UNTIL, MOCK_VALID_AFTER]), signature])

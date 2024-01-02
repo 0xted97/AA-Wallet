@@ -1,6 +1,5 @@
 import {
   AbiCoder,
-  BytesLike,
   keccak256,
   Signer,
   Wallet,
@@ -26,7 +25,7 @@ export const DefaultsForUserOp: UserOperation = {
 }
 
 
-const defaultAbiCoder = new AbiCoder();
+const defaultAbiCoder = AbiCoder.defaultAbiCoder();
 
 export function getAccountInitCode(owner: string, factory: SimpleAccountFactory, salt = 0): string {
   const initCallData = factory.interface.encodeFunctionData("createAccount", [owner, salt]);
@@ -76,6 +75,23 @@ export function getUserOpHash(op: UserOperation, entryPoint: string, chainId: nu
     ['bytes32', 'address', 'uint256'],
     [userOpHash, entryPoint, chainId]);
   return keccak256(enc);
+}
+
+export async function signUserOp (op: UserOperation, signer: Wallet | Signer, entryPoint: EntryPoint): Promise<UserOperation> {
+  const network = await ethers.provider.getNetwork();
+  const chainId = Number(network?.chainId || config.networks.hardhat.chainId);
+
+  const message = getUserOpHash(op, entryPoint.target.toString(), chainId)
+  const msg1 = Buffer.concat([
+    // Buffer.from('\x19Ethereum Signed Message:\n32', 'ascii'),
+    Buffer.from(ethers.getBytes(message))
+  ])
+
+  const sig = await signer.signMessage(msg1);
+  return {
+    ...op,
+    signature: sig
+  }
 }
 
 export async function fillAndSign(op: Partial<UserOperation>, signer: Wallet | Signer, entryPoint: EntryPoint) {
